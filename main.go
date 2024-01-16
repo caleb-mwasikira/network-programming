@@ -8,13 +8,15 @@ import (
 )
 
 func main() {
-	ipv6Str := "2001:0db8:3333:4444:5555:6666:7777:8888"
-	ipv6Binary, err := ip.ConvertIpv6ToBinary(ipv6Str)
+	ipv6 := "2001:0db8:85a3:0000:0000:8a2e:0370:7334"
+	ipv6Binary, err := ip.IPv6StringToBinary(ipv6)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	fmt.Printf("IPv6 string [%v]\n", ipv6Str)
-	fmt.Printf("IPv6 binary [%v]\n", ipv6Binary)
-	return
+	shortenedIpv6 := ip.ShortenIPv6Address(ipv6)
+
+	fmt.Printf("IPv6 string %v\n", ipv6)
+	fmt.Printf("Shortened IPv6 string %v\n", shortenedIpv6)
+	fmt.Printf("IPv6 to binary conversion %v\n", ipv6Binary)
 }
