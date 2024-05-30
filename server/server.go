@@ -1,11 +1,13 @@
 package main
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -184,12 +186,24 @@ func handleCLient(conn net.Conn) {
 
 func main() {
 	s := NewServer("", "0.0.0.0", 8080)
-	listener, err := net.Listen("tcp", s.Addr())
+
+	// load SSL certificates
+	cert_file := path.Join(projectpath.Root, "certs/server.crt")
+	key_file := path.Join(projectpath.Root, "certs/server.key")
+
+	cert, err := tls.LoadX509KeyPair(cert_file, key_file)
 	if err != nil {
-		log.Fatalf("failed to start listener; %v", err)
+		s.log.Fatalf("failed to setup secure communications: %v\n", err)
+	}
+
+	listener, err := tls.Listen("tcp", s.Addr(), &tls.Config{
+		Certificates: []tls.Certificate{cert},
+	})
+	if err != nil {
+		log.Fatalf("failed to start listener: %v", err)
 	}
 	defer listener.Close()
-	s.log.Printf("listener started on port %v\nwaiting for client connections...", s.Addr())
+	s.log.Printf("secure server started on port %v\nwaiting for client connections...", s.Addr())
 
 	for {
 		conn, err := listener.Accept()
