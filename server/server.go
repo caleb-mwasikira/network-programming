@@ -6,153 +6,55 @@ import (
 	"io"
 	"log"
 	"net"
-	"os"
 	"path"
-	"path/filepath"
-	"strings"
 	"time"
 
-	"caleb-mwasikira/network-programming/projectpath"
-
-	"github.com/google/uuid"
+	"caleb-mwasikira/network-programming/utils"
 )
 
-type Server struct {
-	Id   string
-	Host string
-	Port uint16
-	log  *log.Logger
-}
+var (
+	host               string        = "0.0.0.0"
+	logger             *utils.Logger = utils.CreateLogger("server.log")
+	min_port, max_port uint16        = 8000, 9000
+)
 
-func (s *Server) Addr() string {
-	return net.JoinHostPort(s.Host, fmt.Sprint(s.Port))
-}
-
-func networkAddr() (string, error) {
-	var ip_addr string
-
-	addrs, err := net.InterfaceAddrs()
+func scanTCPPort(host string, port uint16) bool {
+	address := fmt.Sprintf("%s:%d", host, port)
+	conn, err := net.DialTimeout("tcp", address, 30*time.Second)
 	if err != nil {
-		return "", err
+		return false // connection refused - port closed
 	}
-	for _, addr := range addrs {
-		ipNet, ok := addr.(*net.IPNet)
-		if ok && !ipNet.IP.IsLoopback() && ipNet.IP.To4() != nil {
-			ip_addr = ipNet.IP.String()
-			break
-		}
-	}
-	return ip_addr, nil
+	conn.Close()
+
+	fmt.Printf("TCP address %v currently in use\n", address)
+	return true // connection accepted - port open
 }
 
-func generateServerId(id string) string {
-	if len(id) != 0 {
-		return id
+// scans all ports on local machine within max_port and min_port
+// and returns the address of the first closed port
+func serverAddress(host string, port uint16) string {
+	fmt.Println("scanning for closed ports...")
+
+	if !scanTCPPort(host, port) {
+		address := fmt.Sprintf("%v:%v", host, port)
+		return address
 	}
 
-	id = uuid.NewString()
-	fields := strings.Split(id, "-")
-	return fields[len(fields)-1]
-}
-
-func testConnection(host string, port uint16) bool {
-	addr := fmt.Sprintf("%v:%v", host, port)
-
-	conn, err := net.DialTimeout("tcp", addr, time.Second)
-	if err != nil {
-		// connection failed
-		return false
-	}
-
-	if conn != nil {
-		// connection accepted
-		defer conn.Close()
-		return true
-	}
-	return false
-}
-
-func getFreePort(host string, min uint16, max uint16) uint16 {
-	for port := min; port < max; port++ {
-		addr := fmt.Sprintf("%v:%v", host, port)
-
-		conn, err := net.DialTimeout("tcp", addr, time.Second)
-		if err != nil {
-			// connection refused - closed port (free to use)
-			return port
-		}
-
-		if conn != nil {
-			defer conn.Close()
-			// connection accepted - open port (currently in use)
-			continue
-		}
-	}
-	return 0
-}
-
-func openLogFile(filename string) (*os.File, error) {
-	log_dir := filepath.Join(projectpath.Root, ".logs/")
-
-	err := os.MkdirAll(log_dir, 0700)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create log directory: %v", err)
-	}
-
-	log_filepath := filepath.Join(log_dir, filename)
-	file, err := os.OpenFile(log_filepath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0700)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open log file: %v", err)
-	}
-
-	return file, nil
-
-}
-
-func NewServer(id string, host string, port uint16) *Server {
-	// validate host
-	if ip := net.ParseIP(host); ip == nil {
-		fmt.Println("invalid IP address provided as host")
-
-		// set host to network address, fallback on loopback address if err
-		var err error = nil
-		host, err = networkAddr()
-		if err != nil {
-			fmt.Printf("failed to set host as network address: %v\n", err)
-			fmt.Println("falling back to loopback address...")
-			host = "127.0.0.1"
+	for port := min_port + 1; port < max_port; port++ {
+		if !scanTCPPort(host, port) {
+			address := fmt.Sprintf("%v:%v", host, port)
+			return address
 		}
 	}
 
-	// validate port
-	if ok := testConnection(host, port); ok {
-		port = getFreePort(host, 1024, 49151)
-		if port == 0 {
-			log.Fatal("no closed ports available for server to run on")
-		}
-	}
-
-	//
-	server_id := generateServerId(id)
-	var log_wrt io.Writer = os.Stdout
-
-	file, err := openLogFile(fmt.Sprintf("%v.log", server_id))
-	if err != nil {
-		fmt.Printf("error saving logs to file: %v", err)
-	} else {
-		log_wrt = io.MultiWriter(os.Stdout, file)
-	}
-
-	return &Server{
-		Id:   server_id,
-		Host: host,
-		Port: port,
-		log:  log.New(log_wrt, "", log.LstdFlags|log.Lshortfile),
-	}
+	log.Fatalf("failed to start server! no available ports left within range (%v - %v)\n", min_port, max_port)
+	return ""
 }
 
 func handleCLient(conn net.Conn) {
 	defer conn.Close()
+	client_address := conn.RemoteAddr().String()
+	logger.Printf("new client connection from address %v", client_address)
 
 	// read data from the connection
 	buffer := make([]byte, 1024)
@@ -166,51 +68,52 @@ func handleCLient(conn net.Conn) {
 		}
 
 		if opErr, ok := err.(*net.OpError); ok && opErr.Timeout() {
-			fmt.Println("timeout occurred:", err)
+			logger.Println("timeout occurred:", err)
 			return
 		}
 
 		return
 	}
-
-	fmt.Println("client says: ", string(buffer[:n]))
+	msg := string(buffer[:n])
+	logger.Printf("message received from client; %v\n", msg)
 
 	// send message to client
-	_, err = conn.Write([]byte("message received"))
+	msg = "message received"
+	logger.Printf("sending message to client; %v\n", msg)
+	_, err = conn.Write([]byte(msg))
 	if err != nil {
-		fmt.Printf("error sending message to client: %v", err)
-		return
+		logger.Fatalf("error sending message to client: %v", err)
 	}
-	fmt.Println("sending message to client...")
+
+	logger.Printf("closing client connection %v\r\n\r\n", client_address)
 }
 
 func main() {
-	s := NewServer("", "0.0.0.0", 8080)
-
 	// load SSL certificates
-	cert_file := path.Join(projectpath.Root, "certs/server.crt")
-	key_file := path.Join(projectpath.Root, "certs/server.key")
+	cert_file := path.Join(utils.ProjectPath, "certs/server.crt")
+	key_file := path.Join(utils.ProjectPath, "certs/server.key")
 
 	cert, err := tls.LoadX509KeyPair(cert_file, key_file)
 	if err != nil {
-		s.log.Fatalf("failed to setup secure communications: %v\n", err)
+		logger.Fatalf("failed to setup secure communications; %v\n", err)
 	}
 
-	listener, err := tls.Listen("tcp", s.Addr(), &tls.Config{
+	server_address := serverAddress(host, min_port)
+	server, err := tls.Listen("tcp", server_address, &tls.Config{
 		Certificates: []tls.Certificate{cert},
 	})
 	if err != nil {
-		log.Fatalf("failed to start listener: %v", err)
+		logger.Fatalf("failed to start server; %v", err)
 	}
-	defer listener.Close()
-	s.log.Printf("secure server started on port %v\nwaiting for client connections...", s.Addr())
+	defer server.Close()
+	logger.Printf("TCP/SSL server started on address %v\n", server_address)
 
 	for {
-		conn, err := listener.Accept()
+		logger.Printf("Waiting for client connections...")
+		conn, err := server.Accept()
 		if err != nil {
-			s.log.Printf("error accepting client %v", err)
+			logger.Printf("error accepting client %v", err)
 		}
-		s.log.Printf("new client connection to remote address %v", conn.RemoteAddr().String())
 
 		go handleCLient(conn)
 	}
